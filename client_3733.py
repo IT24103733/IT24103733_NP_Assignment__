@@ -173,11 +173,9 @@ def clear_screen():
 def show_welcome_banner(host, port):
     """Display the welcome banner with connection info."""
     print()
-    print(f"  {Color.BOLD}╔══════════════════════════════════════════╗{Color.RESET}")
-    print(f"  {Color.BOLD}║{Color.RESET}  {Color.CYAN}Connected to {host}:{port}{Color.RESET}             {Color.BOLD}║{Color.RESET}")
-    print(f"  {Color.BOLD}║{Color.RESET}  {Color.WHITE}Welcome to NP Assignment Demo!{Color.RESET}         {Color.BOLD}║{Color.RESET}")
-    print(f"  {Color.BOLD}║{Color.RESET}  {Color.GREY}Registration: IT24103733{Color.RESET}               {Color.BOLD}║{Color.RESET}")
-    print(f"  {Color.BOLD}╚══════════════════════════════════════════╝{Color.RESET}")
+    print(f" {Color.CYAN}Connected to {host}:{port}{Color.RESET}             ")
+    print(f" {Color.WHITE}Welcome to NP Assignment Demo!{Color.RESET}        ")
+    print(f" {Color.GREY}Registration: IT24103733{Color.RESET}               ")
     print()
 
 
@@ -377,7 +375,7 @@ def screen_session(sock, username, token):
         except (EOFError, KeyboardInterrupt):
             # Attempt logout before exiting
             try:
-                send_command(sock, "LOGOUT")
+                send_command(sock, f"LOGOUT {token}")
                 recv_response(sock)
             except (ConnectionError, OSError):
                 pass
@@ -386,7 +384,7 @@ def screen_session(sock, username, token):
         if choice == "1":
             # Send LOGOUT to server
             try:
-                send_command(sock, "LOGOUT")
+                send_command(sock, f"LOGOUT {token}")
                 resp = recv_response(sock)
             except (ConnectionError, OSError):
                 error("Connection lost. Exiting.")
@@ -406,7 +404,7 @@ def screen_session(sock, username, token):
         elif choice == "q":
             # Auto-logout then quit
             try:
-                send_command(sock, "LOGOUT")
+                send_command(sock, f"LOGOUT {token}")
                 resp = recv_response(sock)
                 if resp and resp["status"] == "OK":
                     success("Logged out successfully")
