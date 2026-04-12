@@ -1,0 +1,17 @@
+CC = gcc
+CFLAGS = -Wall -Wextra -pedantic -g
+LDFLAGS = -lcrypt
+TARGET = server_3733
+
+all: $(TARGET)
+
+$(TARGET): server/server_3733.c
+	$(CC) $(CFLAGS) -o $(TARGET) server/server_3733.c $(LDFLAGS)
+
+clean:
+	rm -f $(TARGET)
+
+run: $(TARGET)
+	./$(TARGET)
+
+.PHONY: all clean run
