@@ -4,11 +4,7 @@ server_3733
 # Object files
 *.o
 
-# Log files
-*.log
 
-# Runtime data
-data/
 
 # OS files
 .DS_Store
