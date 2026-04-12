@@ -1,0 +1,29 @@
+# Compiled binary
+server_3733
+
+# Object files
+*.o
+
+# Log files
+*.log
+
+# Runtime data
+data/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
