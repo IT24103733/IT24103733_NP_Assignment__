@@ -52,7 +52,7 @@
 #define TOKEN_LEN 32
 #define SESSION_TIMEOUT 300
 
-#define DATA_BASE_PATH "/srv/ie2102/IT24103733"
+#define DATA_BASE_PATH "srv/ie2102/IT24103733"
 
 // Audit logging
 #define LOG_FILE "server_IT24103733.log"
