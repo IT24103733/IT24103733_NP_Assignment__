@@ -27,12 +27,12 @@
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
-#include <signal.h>
-#include <stdarg.h>
+#include <signal.h>// reaping zombie processes
+#include <stdarg.h>// Making functions take any number of arguments
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/file.h>
+#include <sys/file.h> // usage of flock happens here used for hardening
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
