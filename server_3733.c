@@ -245,7 +245,7 @@ static int read_message(int fd, read_buffer_t *buf, char *payload) {
       }
     }
 
-    /* ---------- Need more data from socket ---------- */
+    
 
     /* Guard against buffer overflow */
     if (buf->len >= BUF_SIZE - 1) {
