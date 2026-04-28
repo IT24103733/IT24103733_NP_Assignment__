@@ -258,15 +258,21 @@ def screen_login(sock):
             return "disconnect"
 
         if resp["status"] == "OK":
-            # Extract token from message
+            # Extract token and admin status from message
             token = ""
+            is_admin = False
             msg = resp["message"]
             if "TOKEN:" in msg:
-                token = msg.split("TOKEN:")[1].strip()
+                token = msg.split("TOKEN:")[1].split(" ")[0].strip()
+            if "IS_ADMIN:1" in msg:
+                is_admin = True
+
             success(f"Login successful! Welcome, {Color.BOLD}{username}{Color.RESET}")
+            if is_admin:
+                info("You have Admin privileges.")
             dim(f"Token: {token[:16]}...")
             input(f"\n  {Color.GREY}Press Enter to continue...{Color.RESET}")
-            return (username, token)
+            return (username, token, is_admin)
         else:
             error(resp["message"])
             print()
@@ -324,9 +330,20 @@ def screen_register(sock):
             error("Passwords do not match")
             continue
 
+        # --- Role Selection ---
+        print(f"\n    {Color.BOLD}Select Role:{Color.RESET}")
+        print(f"    1) User  (standard access)")
+        print(f"    2) Admin (server management)")
+        try:
+            role_choice = input(f"  {Color.CYAN}Role (1/2):{Color.RESET} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        
+        role = "admin" if role_choice == "2" else "user"
+
         # --- Send to server ---
         try:
-            send_command(sock, f"REGISTER {username} {password}")
+            send_command(sock, f"REGISTER {username} {password} {role}")
             resp = recv_response(sock)
         except (ConnectionError, OSError):
             error("Connection lost. Exiting.")
@@ -353,18 +370,20 @@ def screen_register(sock):
             continue
 
 
-def screen_session(sock, username, token):
+def screen_session(sock, username, token, is_admin):
     """
     Screen 3 — Session (authenticated).
 
-    Options: 1) LOGOUT, Q) Quit (auto-logout first)
+    Options: 1) LOGOUT, 2) KICK USER (if admin), Q) Quit
     Returns: "logout" or "quit"
     """
     clear_screen()
     print(f"\n  {Color.BOLD}━━━ Logged in as: {Color.GREEN}{username}{Color.RESET}{Color.BOLD} ━━━{Color.RESET}\n")
     dim(f"Session active | SID: 1037")
     print()
-    print(f"    {Color.BOLD}1){Color.RESET} LOGOUT  — End your session")
+    print(f"    {Color.BOLD}1){Color.RESET} LOGOUT     — End your session")
+    if is_admin:
+        print(f"    {Color.BOLD}2){Color.RESET} KICK USER  — Manage server users")
     print()
     dim("Press Q to quit (auto-logout)")
     print()
@@ -401,6 +420,19 @@ def screen_session(sock, username, token):
             else:
                 error(resp["message"])
 
+        elif choice == "2" and is_admin:
+            admin_kick_flow(sock, token)
+            # Refresh screen after returning from kick flow
+            clear_screen()
+            print(f"\n  {Color.BOLD}━━━ Logged in as: {Color.GREEN}{username}{Color.RESET}{Color.BOLD} ━━━{Color.RESET}\n")
+            dim(f"Session active | SID: 1037")
+            print()
+            print(f"    {Color.BOLD}1){Color.RESET} LOGOUT     — End your session")
+            print(f"    {Color.BOLD}2){Color.RESET} KICK USER  — Manage server users")
+            print()
+            dim("Press Q to quit (auto-logout)")
+            print()
+
         elif choice == "q":
             # Auto-logout then quit
             try:
@@ -413,7 +445,134 @@ def screen_session(sock, username, token):
             return "quit"
 
         else:
-            warning("Invalid option. Please enter 1 or Q.")
+            warning("Invalid option.")
+
+def admin_kick_flow(sock, token):
+    """Handle the listing and kicking of users."""
+    clear_screen()
+    print(f"\n  {Color.BOLD}━━━ ADMIN: MANAGE USERS ━━━{Color.RESET}\n")
+    
+    # 1. Get user list
+    send_command(sock, f"LIST_USERS")
+    resp = recv_response(sock)
+    
+    if not resp or resp["status"] != "OK":
+        error("Failed to fetch user list.")
+        input(f"\n  {Color.GREY}Press Enter to go back...{Color.RESET}")
+        return
+
+    users = resp["message"].strip().split(" ")
+    users = [u for u in users if u] # Remove empty
+    
+    if not users:
+        info("No users registered.")
+        input(f"\n  {Color.GREY}Press Enter to go back...{Color.RESET}")
+        return
+
+    print(f"    {Color.BOLD}ID  Username{Color.RESET}")
+    print(f"    --  --------")
+    for i, user in enumerate(users):
+        print(f"    {i+1:2}  {user}")
+    
+    print(f"\n  {Color.CYAN}Enter ID to KICK or 'B' to go back:{Color.RESET}")
+    try:
+        target = input(f"  {Color.CYAN}>{Color.RESET} ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+
+    if target == "b":
+        return
+
+    try:
+        idx = int(target) - 1
+        if idx < 0 or idx >= len(users):
+            error("Invalid ID.")
+            input()
+            return
+        
+        kick_username = users[idx]
+        
+        # 2. Confirm and Kick
+        confirm = input(f"  {Color.RED}ARE YOU SURE you want to delete '{kick_username}'? (y/n):{Color.RESET} ").lower()
+        if confirm == 'y':
+            send_command(sock, f"KICK {kick_username}")
+            resp = recv_response(sock)
+            if resp and resp["status"] == "OK":
+                success(f"User '{kick_username}' has been deleted.")
+            else:
+                error(resp["message"] if resp else "Server error.")
+            input()
+    except ValueError:
+        error("Please enter a valid number.")
+        input()
+    clear_screen()
+    print(f"\n  {Color.BOLD}━━━ Logged in as: {Color.GREEN}{username}{Color.RESET}{Color.BOLD} ━━━{Color.RESET}\n")
+    dim(f"Session active | SID: 1037")
+    print()
+    print(f"    {Color.BOLD}1){Color.RESET} LOGOUT     — End your session")
+    if is_admin:
+        print(f"    {Color.BOLD}2){Color.RESET} KICK USER  — Manage server users")
+    print()
+    dim("Press Q to quit (auto-logout)")
+    print()
+
+    while True:
+        try:
+            choice = input(f"  {Color.CYAN}>{Color.RESET} ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            # Attempt logout before exiting
+            try:
+                send_command(sock, f"LOGOUT {token}")
+                recv_response(sock)
+            except (ConnectionError, OSError):
+                pass
+            return "quit"
+
+        if choice == "1":
+            # Send LOGOUT to server
+            try:
+                send_command(sock, f"LOGOUT {token}")
+                resp = recv_response(sock)
+            except (ConnectionError, OSError):
+                error("Connection lost. Exiting.")
+                return "quit"
+
+            if resp is None:
+                error("Server closed the connection.")
+                return "quit"
+
+            if resp["status"] == "OK":
+                success("Logged out successfully")
+                input(f"\n  {Color.GREY}Press Enter to continue...{Color.RESET}")
+                return "logout"
+            else:
+                error(resp["message"])
+
+        elif choice == "2" and is_admin:
+            admin_kick_flow(sock, token)
+            clear_screen()
+            print(f"\n  {Color.BOLD}━━━ Logged in as: {Color.GREEN}{username}{Color.RESET}{Color.BOLD} ━━━{Color.RESET}\n")
+            dim(f"Session active | SID: 1037")
+            print()
+            print(f"    {Color.BOLD}1){Color.RESET} LOGOUT     — End your session")
+            print(f"    {Color.BOLD}2){Color.RESET} KICK USER  — Manage server users")
+            print()
+            dim("Press Q to quit (auto-logout)")
+            print()
+
+        elif choice == "q":
+            # Auto-logout then quit
+            try:
+                send_command(sock, f"LOGOUT {token}")
+                resp = recv_response(sock)
+                if resp and resp["status"] == "OK":
+                    success("Logged out successfully")
+            except (ConnectionError, OSError):
+                pass
+            return "quit"
+
+        else:
+            warning("Invalid option.")
 
 
 # ============================================================
@@ -460,11 +619,11 @@ def main():
                 elif result is None:
                     continue  # Back to Welcome
                 else:
-                    # Login successful: (username, token)
-                    username, token = result
+                    # Login successful: (username, token, is_admin)
+                    username, token, is_admin = result
 
                     # --- Screen 3: Session ---
-                    session_result = screen_session(sock, username, token)
+                    session_result = screen_session(sock, username, token, is_admin)
 
                     if session_result == "quit":
                         break

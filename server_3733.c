@@ -39,6 +39,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <dirent.h>
 
 /* ============================================================
  *  Section 1: Constants & Structs
@@ -81,6 +82,7 @@ typedef struct {
   char token[TOKEN_LEN * 2 + 1];
   time_t last_activity;
   int is_authenticated;
+  int is_admin; // 1 if user is admin
   char client_ip[INET_ADDRSTRLEN];
   int client_port;
 } client_session_t;
@@ -569,30 +571,42 @@ static void handle_register(int client_fd, const char *args) {
     return;
   }
 
-  char username[64], password[256];
-  const char *space = strchr(args, ' ');
+  char username[64], password[256], role[16];
+  const char *space1 = strchr(args, ' ');
+  const char *space2 = space1 ? strchr(space1 + 1, ' ') : NULL;
 
-  if (!space || space == args) {
+  if (!space1 || !space2 || space1 == args) {
     send_response(client_fd, "ERR", 400,
-                  "Usage: REGISTER <username> <password>");
+                  "Usage: REGISTER <username> <password> <user|admin>");
     return;
   }
 
   /* Extract username */
-  int ulen = space - args;
+  int ulen = space1 - args;
   if (ulen >= (int)sizeof(username))
     ulen = (int)sizeof(username) - 1;
   memcpy(username, args, ulen);
   username[ulen] = '\0';
 
-  /* Extract password (everything after the first space) */
-  const char *pass_start = space + 1;
-  if (*pass_start == '\0') {
+  /* Extract password */
+  int plen = space2 - (space1 + 1);
+  if (plen <= 0) {
     send_response(client_fd, "ERR", 400, "Password cannot be empty");
     return;
   }
-  strncpy(password, pass_start, sizeof(password) - 1);
-  password[sizeof(password) - 1] = '\0';
+  if (plen >= (int)sizeof(password))
+    plen = (int)sizeof(password) - 1;
+  memcpy(password, space1 + 1, plen);
+  password[plen] = '\0';
+
+  /* Extract role */
+  strncpy(role, space2 + 1, sizeof(role) - 1);
+  role[sizeof(role) - 1] = '\0';
+
+  if (strcmp(role, "user") != 0 && strcmp(role, "admin") != 0) {
+    send_response(client_fd, "ERR", 400, "Role must be 'user' or 'admin'");
+    return;
+  }
 
   /* --- Validate username --- */
   if (!validate_username(username)) {
@@ -638,6 +652,15 @@ static void handle_register(int client_fd, const char *args) {
   fchmod(fileno(f), 0600);
   fprintf(f, "%s\n", hashed);
   fclose(f);
+
+  /* --- Write role file --- */
+  char role_path[1024];
+  snprintf(role_path, sizeof(role_path), "%s/role", user_dir);
+  f = fopen(role_path, "w");
+  if (f) {
+    fprintf(f, "%s\n", role);
+    fclose(f);
+  }
 
   /* Scrub password from memory */
   memset(password, 0, sizeof(password));
@@ -773,6 +796,21 @@ static void handle_login(int client_fd, const char *args,
   /* Reset lockout counter */
   reset_lockout(username);
 
+  /* --- Check Role --- */
+  char role_path[1024];
+  snprintf(role_path, sizeof(role_path), "%s/%s/role", DATA_BASE_PATH, username);
+  FILE *rf = fopen(role_path, "r");
+  session->is_admin = 0;
+  if (rf) {
+    char role_buf[16];
+    if (fgets(role_buf, sizeof(role_buf), rf)) {
+      if (strncmp(role_buf, "admin", 5) == 0) {
+        session->is_admin = 1;
+      }
+    }
+    fclose(rf);
+  }
+
   /* Generate session token */
   if (generate_token(session->token) != 0) {
     send_response(client_fd, "ERR", 500, "Token generation failed");
@@ -785,13 +823,84 @@ static void handle_login(int client_fd, const char *args,
   session->is_authenticated = 1;
   session->last_activity = time(NULL);
 
-  /* Build response with token */
-  char token_msg[128];
-  snprintf(token_msg, sizeof(token_msg), "Login successful TOKEN:%s",
-           session->token);
+  /* Build response with token and admin status */
+  char token_msg[256];
+  snprintf(token_msg, sizeof(token_msg), "Login successful TOKEN:%s%s",
+           session->token, session->is_admin ? " IS_ADMIN:1" : "");
 
   audit_log(session, "LOGIN %s -> OK 200", username);
   send_response(client_fd, "OK", 200, token_msg);
+}
+
+/*
+ * handle_list_users — Returns a list of all registered usernames.
+ */
+static void handle_list_users(int client_fd, client_session_t *session) {
+  if (!session->is_authenticated || !session->is_admin) {
+    send_response(client_fd, "ERR", 401, "Admin privileges required");
+    return;
+  }
+
+  DIR *d = opendir(DATA_BASE_PATH);
+  if (!d) {
+    send_response(client_fd, "ERR", 500, "Failed to open database");
+    return;
+  }
+
+  char user_list[MAX_PAYLOAD] = "";
+  struct dirent *dir;
+  while ((dir = readdir(d)) != NULL) {
+    if (dir->d_name[0] == '.') continue;
+    
+    // Check if it's a directory (user folder)
+    char full_path[1024];
+    snprintf(full_path, sizeof(full_path), "%s/%s", DATA_BASE_PATH, dir->d_name);
+    struct stat st;
+    if (stat(full_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+      strncat(user_list, dir->d_name, sizeof(user_list) - strlen(user_list) - 2);
+      strcat(user_list, " ");
+    }
+  }
+  closedir(d);
+
+  send_response(client_fd, "OK", 200, user_list);
+}
+
+/*
+ * handle_kick — Permanently delete a user from the system.
+ */
+static void handle_kick(int client_fd, const char *args, client_session_t *session) {
+  if (!session->is_authenticated || !session->is_admin) {
+    send_response(client_fd, "ERR", 401, "Admin privileges required");
+    return;
+  }
+
+  if (!args || args[0] == '\0') {
+    send_response(client_fd, "ERR", 400, "Usage: KICK <username>");
+    return;
+  }
+
+  char kick_user[64];
+  strncpy(kick_user, args, sizeof(kick_user) - 1);
+  kick_user[sizeof(kick_user) - 1] = '\0';
+
+  if (strcmp(kick_user, session->username) == 0) {
+    send_response(client_fd, "ERR", 400, "You cannot kick yourself");
+    return;
+  }
+
+  char user_path[512];
+  snprintf(user_path, sizeof(user_path), "%s/%s", DATA_BASE_PATH, kick_user);
+
+  // Simple and effective: use system rm -rf
+  char cmd[1024];
+  snprintf(cmd, sizeof(cmd), "rm -rf %s", user_path);
+  if (system(cmd) == 0) {
+    audit_log(session, "ADMIN KICK %s -> OK", kick_user);
+    send_response(client_fd, "OK", 200, "User kicked and deleted");
+  } else {
+    send_response(client_fd, "ERR", 500, "Failed to delete user");
+  }
 }
 
 /*
@@ -1184,6 +1293,10 @@ static void handle_client(int client_fd, client_session_t *session) {
       handle_login(client_fd, args, session);
     } else if (strcmp(command, "LOGOUT") == 0) {
       handle_logout(client_fd, args, session);
+    } else if (strcmp(command, "LIST_USERS") == 0) {
+      handle_list_users(client_fd, session);
+    } else if (strcmp(command, "KICK") == 0) {
+      handle_kick(client_fd, args, session);
     } else {
       send_response(client_fd, "ERR", 400, "Unknown command");
       audit_log(session, "%s -> ERR 400 Unknown command", command);
